@@ -283,19 +283,35 @@
   .stat b{font-size:19px;font-weight:750;font-variant-numeric:tabular-nums}
   .stat b small{font-size:11px;font-weight:600;color:var(--ink3);margin-left:2px}
 
-  /* ---------- race（好友对战） ---------- */
-  .racebar{
-    display:none;align-items:center;justify-content:center;gap:16px;
-    margin:0 0 10px;font-size:12px;color:var(--ink2);
-    background:#f7f8fd;border:1px solid #e9ebfa;border-radius:11px;
-    padding:7px 10px;flex-wrap:wrap;
+  /* ---------- 对战赛道 ---------- */
+  .racetrack{
+    display:none;margin:0 0 10px;
+    background:#f7f8fd;border:1px solid #e9ebfa;border-radius:13px;
+    padding:9px 11px;
   }
-  .racebar.show{display:flex}
-  .racebar b{color:var(--ink);font-variant-numeric:tabular-nums}
-  .racebar .r-op-state{color:var(--ink3)}
-  .racebar .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#c3c8da;margin-left:5px;vertical-align:1px}
-  .racebar .dot.on{background:#0f9d76}
-  .racebar .dot.off{background:#e2524a}
+  .racetrack.show{display:block}
+  .rt-row{display:flex;align-items:center;gap:8px;margin:5px 0}
+  .rt-row:first-child{margin-top:0}
+  .rt-row:last-child{margin-bottom:0}
+  .rt-name{flex:none;width:26px;font-size:11.5px;color:var(--ink2);font-weight:700;text-align:center}
+  .rt-lane{
+    position:relative;flex:1;height:20px;
+    background:linear-gradient(180deg,#ffffff,#fbfcff);
+    border:1px solid #e4e6f1;border-radius:10px;
+  }
+  .rt-slot{position:absolute;top:4px;bottom:4px;width:1px;background:#e6e8f2}
+  .rt-flag{position:absolute;right:3px;top:50%;transform:translateY(-50%);font-size:10px;line-height:1}
+  .rt-avatar{
+    position:absolute;top:50%;width:14px;height:14px;border-radius:50%;
+    transform:translate(-50%,-50%);
+    transition:left .2s linear;
+  }
+  .rt-avatar.me{background:linear-gradient(135deg,#5b6bff,#8b7bff);border:2px solid #fff;box-shadow:0 2px 6px rgba(76,91,212,.45)}
+  .rt-avatar.op{background:linear-gradient(135deg,#eda01f,#f2b45c);border:2px solid #fff;box-shadow:0 2px 6px rgba(237,160,31,.45)}
+  .rt-meta{
+    flex:none;min-width:74px;text-align:right;
+    font-size:11px;color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap;
+  }
   .rcode{
     font-size:30px;font-weight:800;letter-spacing:6px;color:var(--accent);
     font-variant-numeric:tabular-nums;padding-left:6px;
@@ -376,10 +392,25 @@
       <button id="btnAnswer">看答案</button>
     </div>
 
-    <div class="racebar" id="racebar">
-      <span>⚔️ 对战 <b id="rOpNick">—</b><i class="dot" id="rNet"></i></span>
-      <span>我 <b id="rMe">0/5</b></span>
-      <span>对方 <b id="rOp">0/5</b> <span class="r-op-state" id="rOpState"></span></span>
+    <div class="racetrack" id="racetrack">
+      <div class="rt-row">
+        <span class="rt-name">我</span>
+        <div class="rt-lane">
+          <i class="rt-slot" style="left:20%"></i><i class="rt-slot" style="left:40%"></i><i class="rt-slot" style="left:60%"></i><i class="rt-slot" style="left:80%"></i>
+          <span class="rt-flag">🏁</span>
+          <span class="rt-avatar me" id="rtMe" style="left:6%"></span>
+        </div>
+        <span class="rt-meta" id="rtMeMeta">0/5</span>
+      </div>
+      <div class="rt-row">
+        <span class="rt-name" id="rtOpName">对方</span>
+        <div class="rt-lane">
+          <i class="rt-slot" style="left:20%"></i><i class="rt-slot" style="left:40%"></i><i class="rt-slot" style="left:60%"></i><i class="rt-slot" style="left:80%"></i>
+          <span class="rt-flag">🏁</span>
+          <span class="rt-avatar op" id="rtOp" style="left:6%"></span>
+        </div>
+        <span class="rt-meta" id="rtOpMeta">0/5</span>
+      </div>
     </div>
 
     <div class="toast" id="toast"></div>
@@ -1171,6 +1202,7 @@
     me:{solved:0, failed:0, used:0, streak:0, best:0},
     op:{solved:0, failed:0, used:0, cur:1, finished:false, left:false},
     opFinal:null, myFinished:false, startAt:0, myWall:0,
+    tickId:null, lastOpAt:0, lastOpFail:false,
     mqtt:null, topic:'', seated:false, forceTimer:null,
     status:'',
 
@@ -1277,13 +1309,16 @@
           if(msg.v===1 && typeof msg.seed==='number'){ this.startRace(msg.seed); }
           break;
         case 'progress':
+          this.lastOpFail = (msg.f|0) > this.op.failed;
           this.op.solved=msg.s|0; this.op.failed=msg.f|0; this.op.used=+msg.used||0;
           this.op.cur=Math.min(this.rounds, (msg.s|0)+(msg.f|0)+1);
+          this.lastOpAt=performance.now();
           this.renderBar();
           break;
         case 'finish':
           this.op.finished=true;
           this.opFinal={s:msg.s|0, f:msg.f|0, used:+msg.used||0, wall:+msg.wall||+msg.used||0, finished:true};
+          this.lastOpAt=performance.now();
           this.renderBar();
           if(this.myFinished){ setTimeout(function(){ self.showResult(); }, 500); }
           break;
@@ -1382,6 +1417,7 @@
     leaveLobby:function(){
       if(this.mqtt){ this.send({t:'leave'}); this.mqtt.close(); this.mqtt=null; }
       clearTimeout(this.forceTimer);
+      this.stopTick();
       this.mode='off'; this.role=null;
     },
     copyLink:function(){
@@ -1418,6 +1454,7 @@
       this.op={solved:0, failed:0, used:0, cur:1, finished:false, left:false};
       this.opFinal=null; this.myFinished=false;
       this.startAt=performance.now(); this.myWall=0;
+      this.lastOpAt=performance.now(); this.lastOpFail=false;
       hideOverlay();
       this.renderBar();
       startPuzzle();
@@ -1451,6 +1488,7 @@
     },
     showResult:function(){
       clearTimeout(this.forceTimer);
+      this.stopTick();
       this.mode='done';
       var me=this.me, fin=this.opFinal, note='';
       var v;
@@ -1486,24 +1524,57 @@
     exitToStart:function(silent){
       if(this.mqtt){ this.send({t:'leave'}); this.mqtt.close(); this.mqtt=null; }
       clearTimeout(this.forceTimer);
+      this.stopTick();
       this.mode='off'; this.role=null; this.seated=false;
-      var bar=this.el('racebar'); if(bar) bar.classList.remove('show');
+      var track=this.el('racetrack'); if(track) track.classList.remove('show');
       resetGame();
       if(!silent) showOverlay(cardStart());
     },
     renderBar:function(){
-      var bar=this.el('racebar');
-      if(!bar) return;
+      var track=this.el('racetrack');
+      if(!track) return;
       var show = this.mode==='racing' || (this.mode==='done' && this.myFinished);
-      bar.classList.toggle('show', show);
-      if(!show) return;
-      this.el('rOpNick').textContent=this.opNick||'—';
-      this.el('rMe').textContent=this.me.solved+'/'+this.rounds;
-      this.el('rOp').textContent=this.op.solved+'/'+this.rounds;
-      var st=this.op.finished?'已完成':(this.op.left?'已掉线':(this.mode==='racing'?'第'+this.op.cur+'题':'等待中'));
-      this.el('rOpState').textContent=st;
-      var dot=this.el('rNet');
-      dot.className='dot '+(this.status==='online'?'on':'off');
+      track.classList.toggle('show', show);
+      if(show){
+        this.el('rtOpName').textContent=this.opNick||'对方';
+        this.startTick();
+      }
+      this.tickTrack();
+    },
+    startTick:function(){
+      if(this.tickId) return;
+      var self=this;
+      this.tickId=setInterval(function(){ self.tickTrack(); }, 200);
+    },
+    stopTick:function(){
+      if(this.tickId){ clearInterval(this.tickId); this.tickId=null; }
+    },
+    tickTrack:function(){
+      var track=this.el('racetrack');
+      if(!track || !track.classList.contains('show')) return;
+      var rounds=this.rounds;
+      // 我的位置：完成题数 + 本题实时进度
+      var meDone=this.me.solved+this.me.failed;
+      var meWithin=0;
+      if(this.mode==='racing' && !this.myFinished && state.phase==='play'){
+        meWithin=Math.min(1, Math.max(0,(state.total-state.timeLeft)/state.total));
+      }
+      // 对方的位置：以最近一次进度消息为基准推算本题已用时（扣除翻题间隔）
+      var opDone=this.op.solved+this.op.failed;
+      var opElapsed=0;
+      if(!this.op.finished && !this.op.left && this.lastOpAt){
+        opElapsed=Math.max(0,(performance.now()-this.lastOpAt)/1000 - (this.lastOpFail?3:1.15));
+      }
+      var pos=function(p){ return (6+p*84).toFixed(1)+'%'; };
+      this.el('rtMe').style.left=pos((meDone+meWithin)/rounds);
+      this.el('rtOp').style.left=pos((opDone+Math.min(1,opElapsed/state.total))/rounds);
+      var meEl=Math.max(0, state.total-state.timeLeft);
+      this.el('rtMeMeta').textContent=meDone+'/'+rounds+' · '+meEl.toFixed(1)+'秒';
+      var opTxt;
+      if(this.op.finished) opTxt=opDone+'/'+rounds+' · 完成';
+      else if(this.op.left) opTxt=opDone+'/'+rounds+' · 掉线';
+      else opTxt=opDone+'/'+rounds+' · '+opElapsed.toFixed(1)+'秒';
+      this.el('rtOpMeta').textContent=opTxt;
     }
   };
 
