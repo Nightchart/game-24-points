@@ -1170,7 +1170,7 @@
     rng:null, raceRecent:[],
     me:{solved:0, failed:0, used:0, streak:0, best:0},
     op:{solved:0, failed:0, used:0, cur:1, finished:false, left:false},
-    opFinal:null, myFinished:false,
+    opFinal:null, myFinished:false, startAt:0, myWall:0,
     mqtt:null, topic:'', seated:false, forceTimer:null,
     status:'',
 
@@ -1202,7 +1202,7 @@
       var html = '<div class="card">' +
         '<div class="badge">好友对战</div>' +
         '<h1 style="font-size:26px">同题竞速</h1>' +
-        '<p class="lead">两人进入同一房间，做同一批题目实时比拼。<br>共 <b>5 题</b>，每题 60 秒；解出多者胜，平局比总用时。</p>' +
+        '<p class="lead">两人进入同一房间，做同一批题目实时比拼。<br>共 <b>5 题</b>，每题 60 秒；解出多者胜，平局比完赛用时。</p>' +
         '<div class="lobby-row"><label>昵称</label><input id="raceNick" maxlength="8" value="'+this.myNick+'"></div>' +
         '<div class="lobby-row" id="joinRow" style="display:none"><label>房号</label><input id="raceCode" class="upper" maxlength="5" placeholder="5 位房号" value="'+(prefill||'')+'"><button class="ghost" data-action="race-join" style="flex:none">加入</button></div>' +
         '<div class="btn-row">' +
@@ -1283,7 +1283,7 @@
           break;
         case 'finish':
           this.op.finished=true;
-          this.opFinal={s:msg.s|0, f:msg.f|0, used:+msg.used||0};
+          this.opFinal={s:msg.s|0, f:msg.f|0, used:+msg.used||0, wall:+msg.wall||+msg.used||0, finished:true};
           this.renderBar();
           if(this.myFinished){ setTimeout(function(){ self.showResult(); }, 500); }
           break;
@@ -1417,6 +1417,7 @@
       this.me={solved:0, failed:0, used:0, streak:0, best:0};
       this.op={solved:0, failed:0, used:0, cur:1, finished:false, left:false};
       this.opFinal=null; this.myFinished=false;
+      this.startAt=performance.now(); this.myWall=0;
       hideOverlay();
       this.renderBar();
       startPuzzle();
@@ -1428,7 +1429,9 @@
       this.renderBar();
       if(this.myDone()){
         this.myFinished=true;
-        this.send({t:'finish', s:this.me.solved, f:this.me.failed, used:Math.round(this.me.used*10)/10});
+        // 完赛总时长：开局到完成全部题目的真实耗时（含翻题间隔），先完成的人数字一定更小
+        this.myWall=Math.round((performance.now()-this.startAt)/100)/10;
+        this.send({t:'finish', s:this.me.solved, f:this.me.failed, used:Math.round(this.me.used*10)/10, wall:this.myWall});
       }
     },
     waitOpponent:function(){
@@ -1454,22 +1457,25 @@
       if(!fin){
         v='win';
         note=this.op.left?'（对方已掉线）':'（对方未完成全部题目）';
-        fin={s:this.op.solved, f:this.op.failed, used:this.op.used};
+        fin={s:this.op.solved, wall:0, finished:false};
       } else if(me.solved!==fin.s){ v=me.solved>fin.s?'win':'lose'; }
-      else if(me.used!==fin.used){ v=me.used<fin.used?'win':'lose'; }
+      else if(this.myWall!==fin.wall){ v=this.myWall<fin.wall?'win':'lose'; }
       else { v='tie'; }
       var head = v==='win' ? '🏆 你赢了！' : (v==='lose' ? '惜败一筹' : '平分秋色');
       var badge = v==='win' ? 'good' : (v==='lose' ? 'warn' : '');
-      var fmt=function(s,f,u){ return s+' 题 · '+(Math.round(u*10)/10)+' 秒'; };
+      var fmtLine=function(name, s, wall, finished){
+        return '<span>'+name+'</span><b>'+s+' 题 · '+(finished ? (Math.round(wall*10)/10)+' 秒' : '未完成')+'</b>';
+      };
       var isHost = this.role==='host';
       showOverlay('<div class="card">' +
         '<div class="badge '+badge+'">'+(v==='win'?'比赛胜利':(v==='lose'?'比赛失利':'平局'))+'</div>' +
         '<h1 style="font-size:26px">'+head+'</h1>' +
         (note?'<p class="muted" style="margin:-4px 0 0">'+note+'</p>':'') +
         '<div class="vs-list">' +
-          '<div class="vs-row me"><span>我 · '+this.myNick+'</span><b>'+fmt(me.solved,me.failed,me.used)+'</b></div>' +
-          '<div class="vs-row"><span>对方 · '+(this.opNick||'—')+'</span><b>'+fmt(fin.s,fin.f,fin.used)+'</b></div>' +
+          '<div class="vs-row me">'+fmtLine('我 · '+this.myNick, me.solved, this.myWall, true)+'</div>' +
+          '<div class="vs-row">'+fmtLine('对方 · '+(this.opNick||'—'), fin.s, fin.wall, !!fin.finished)+'</div>' +
         '</div>' +
+        '<p class="muted" style="margin:-8px 0 14px">用时 = 开局到完赛的总时长</p>' +
         '<div class="btn-row">' +
           (isHost ? '<button class="primary" data-action="race-again">再来一局</button>'
                   : '<button class="primary" disabled style="opacity:.5;cursor:default">等房主开局</button>') +
