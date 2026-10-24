@@ -523,29 +523,126 @@
   }
 
   /* ================= 音效 ================= */
-  var audioCtx=null, soundOn=true;
+  var audioCtx=null, soundOn=true, bgmGain=null;
+  function ensureCtx(){
+    if(!audioCtx){
+      try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ return null; }
+    }
+    try{ if(audioCtx.state==='suspended') audioCtx.resume(); }catch(e){}
+    return audioCtx;
+  }
   function tone(freq,dur,type,vol,delay){
     if(!soundOn) return;
+    var ctx=ensureCtx(); if(!ctx) return;
     try{
-      if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
-      var t0 = audioCtx.currentTime + (delay||0);
-      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      var t0 = ctx.currentTime + (delay||0);
+      var o = ctx.createOscillator(), g = ctx.createGain();
       o.type = type||'sine';
       o.frequency.setValueAtTime(freq,t0);
       g.gain.setValueAtTime(0.0001,t0);
       g.gain.linearRampToValueAtTime(vol||0.05,t0+0.012);
       g.gain.exponentialRampToValueAtTime(0.0001,t0+(dur||0.1));
-      o.connect(g); g.connect(audioCtx.destination);
+      o.connect(g); g.connect(ctx.destination);
       o.start(t0); o.stop(t0+(dur||0.1)+0.03);
     }catch(e){}
   }
+  // 背景音乐专用通道（音量独立，可整体淡出）
+  function bgmNote(freq,dur,type,vol,t0){
+    var ctx=audioCtx; if(!ctx || !bgmGain) return;
+    try{
+      var o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = type||'sine';
+      o.frequency.setValueAtTime(freq,t0);
+      g.gain.setValueAtTime(0.0001,t0);
+      g.gain.linearRampToValueAtTime(vol,t0+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+dur);
+      o.connect(g); g.connect(bgmGain);
+      o.start(t0); o.stop(t0+dur+0.05);
+    }catch(e){}
+  }
+  // 程序合成 BGM：随倒计时自动升档（0 平静 / 1 紧张 / 2 心跳）
+  var BGM = {
+    on:false, timerId:null, step:0, nextTime:0, intensity:0,
+    bpm:function(){ return this.intensity===2?138:(this.intensity===1?126:96); },
+    start:function(){
+      if(this.on || !soundOn) return;
+      try{
+        var ctx=ensureCtx(); if(!ctx) return;
+        if(!bgmGain){ bgmGain=ctx.createGain(); bgmGain.gain.value=0.7; bgmGain.connect(ctx.destination); }
+        this.on=true; this.step=0;
+        this.nextTime=ctx.currentTime+0.15;
+        var self=this;
+        this.timerId=setInterval(function(){ self.schedule(); }, 80);
+      }catch(e){}
+    },
+    stop:function(){
+      this.on=false;
+      if(this.timerId){ clearInterval(this.timerId); this.timerId=null; }
+    },
+    setIntensity:function(n){
+      this.intensity=n;
+    },
+    schedule:function(){
+      if(!this.on || !soundOn || !audioCtx) return;
+      var stepDur = 60/this.bpm()/2;
+      var guard=0;
+      while(audioCtx.currentTime + 0.3 > this.nextTime && guard++<32){
+        this.playStep(this.step, this.nextTime);
+        this.nextTime += stepDur;
+        this.step++;
+      }
+    },
+    playStep:function(step, t){
+      var I=this.intensity, s=step%16;
+      var ARP=[220, 261.63, 329.63, 392];
+      if(I===0){
+        // 平静：轻琶音 + 长低音
+        if(s%2===0) bgmNote(ARP[(step/2)%4|0], 0.30, 'sine', 0.016, t);
+        if(s===0) bgmNote(110, 0.9, 'triangle', 0.03, t);
+      } else if(I===1){
+        // 紧张：走针 + 短促琶音 + 行进低音
+        bgmNote(1800, 0.02, 'square', 0.010, t);
+        if(s%2===0) bgmNote(ARP[(step/2)%4|0], 0.14, 'triangle', 0.02, t);
+        if(s%4===0) bgmNote([110,110,87.31,98][(step/4|0)%4], 0.4, 'triangle', 0.045, t);
+      } else {
+        // 心跳：低频双跳 + 密集走针
+        if(s===0||s===1||s===8||s===9) bgmNote(64, 0.12, 'sine', 0.10, t);
+        bgmNote(2200, 0.018, 'square', 0.012, t);
+        if(s%2===0) bgmNote([220,246.94,261.63,311.13][(step/2)%4|0], 0.10, 'triangle', 0.018, t);
+        if(s===4||s===12) bgmNote([110,103.83][(step/8|0)%2], 0.35, 'triangle', 0.05, t);
+      }
+    }
+  };
   var sfx = {
     select:function(){ tone(520,0.06,'sine',0.045); },
     merge:function(){ tone(660,0.07,'triangle',0.05); },
     win:function(){ tone(660,0.1,'sine',0.06,0); tone(880,0.12,'sine',0.055,0.09); tone(1180,0.16,'sine',0.05,0.19); },
+    sparkle:function(){ tone(1567.98,0.09,'sine',0.04,0.05); tone(2093,0.14,'sine',0.035,0.14); },
+    fanfare:function(){ var n=[523.25,659.26,783.99,1046.5,1318.5]; for(var i=0;i<n.length;i++) tone(n[i],0.16,'triangle',0.05,i*0.09); tone(2093,0.25,'sine',0.03,0.5); },
+    comfort:function(){ tone(329.63,0.18,'sine',0.04,0); tone(261.63,0.3,'sine',0.04,0.16); },
     fail:function(){ tone(300,0.12,'sawtooth',0.04); tone(220,0.16,'sawtooth',0.035,0.1); },
     time:function(){ tone(240,0.2,'sine',0.05); tone(180,0.26,'sine',0.045,0.16); }
   };
+  // 夸奖/安慰语音（浏览器 TTS，不可用时静默降级为纯音效）
+  var PRAISE=['漂亮！','答对了！','太棒了！','好快！','厉害！'];
+  var COMFORT=['没关系','别灰心','下次一定行','稳住，慢慢想'];
+  function speak(text, kind){
+    if(!soundOn) return false;
+    try{
+      var synth=window.speechSynthesis;
+      if(!synth) return false;
+      synth.cancel();
+      var u=new SpeechSynthesisUtterance(text);
+      u.lang='zh-CN';
+      u.rate = kind==='comfort'?1.0:1.15;
+      u.pitch = kind==='comfort'?0.85:1.3;
+      u.volume=0.9;
+      var vs=synth.getVoices();
+      for(var i=0;i<vs.length;i++){ if((vs[i].lang||'').toLowerCase().indexOf('zh')===0){ u.voice=vs[i]; break; } }
+      synth.speak(u);
+      return true;
+    }catch(e){ return false; }
+  }
 
   /* ================= 状态 ================= */
   var CIRC = 2*Math.PI*31;
@@ -657,6 +754,8 @@
     els.arc.classList.toggle('gold', left<=20 && left>10);
     els.arc.classList.toggle('red', left<=10);
     els.timer.classList.toggle('urgent', left<=10 && state.phase==='play');
+    // BGM 随倒计时升档：>20s 平静 / ≤20s 紧张 / ≤10s 心跳
+    BGM.setIntensity(state.phase==='play' ? (left<=10?2:(left<=20?1:0)) : 0);
   }
 
   function renderStats(){
@@ -716,6 +815,7 @@
     state.phase = 'play';
     renderAll();
     startTimer();
+    BGM.start();
   }
 
   function pushHistory(){
@@ -783,6 +883,8 @@
     state.bestStreak = Math.max(state.bestStreak, state.streak);
     state.times.push(used);
     sfx.win();
+    sfx.sparkle();
+    speak(PRAISE[Math.floor(Math.random()*PRAISE.length)], 'praise');
     var el = els.nums.querySelector('.tile');
     if(el) el.classList.add('glow');
     toast('答对了！用时 '+used.toFixed(1)+' 秒','good');
@@ -802,7 +904,8 @@
     state.failed++;
     state.streak = 0;
     if(RACE.mode==='racing'){ RACE.onMyRound(false, state.total); }
-    sfx.time();
+    sfx.comfort();
+    speak(COMFORT[Math.floor(Math.random()*COMFORT.length)], 'comfort');
     revealCard('时间到', 'warn', '超时了，看看这题的解法');
   }
 
@@ -969,6 +1072,7 @@
     stopTimer();
     clearTimeout(state.nextId);
     clearInterval(state.autoId);
+    BGM.stop();
     state.phase='over';
     renderOps();
     showOverlay(cardEnd());
@@ -977,6 +1081,7 @@
     stopTimer();
     clearInterval(state.autoId);
     clearTimeout(state.nextId);
+    BGM.stop();
     state.puzzleNo=0; state.solved=0; state.failed=0;
     state.streak=0; state.bestStreak=0; state.times=[]; state.recent=[];
     state.tiles=[]; state.history=[]; state.sel=null; state.op=null;
@@ -991,6 +1096,7 @@
     stopTimer();
     clearInterval(state.autoId); state.autoId=null;
     clearTimeout(state.nextId); state.nextId=null;
+    BGM.stop();
     state.phase='over';
     renderOps();
     showOverlay(cardExit());
@@ -1012,6 +1118,8 @@
     state.failed++;
     state.streak=0;
     if(RACE.mode==='racing'){ RACE.onMyRound(false, state.total); }
+    sfx.comfort();
+    speak(COMFORT[Math.floor(Math.random()*COMFORT.length)], 'comfort');
     revealCard('看答案', '', '本题不计入已解出');
   });
   els.btnEnd.addEventListener('click', function(){
@@ -1021,7 +1129,14 @@
   els.btnSound.addEventListener('click', function(){
     soundOn = !soundOn;
     els.btnSound.classList.toggle('off', !soundOn);
-    if(soundOn) sfx.select();
+    if(soundOn){
+      ensureCtx();
+      if(state.phase==='play') BGM.start();
+      sfx.select();
+    } else {
+      BGM.stop();
+      try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+    }
   });
 
   els.ops.addEventListener('click', function(e){
@@ -1457,6 +1572,7 @@
       this.lastOpAt=performance.now(); this.lastOpFail=false;
       hideOverlay();
       this.renderBar();
+      speak('比赛开始','praise');
       startPuzzle();
     },
     onMyRound:function(won, used){
@@ -1501,6 +1617,10 @@
       else { v='tie'; }
       var head = v==='win' ? '🏆 你赢了！' : (v==='lose' ? '惜败一筹' : '平分秋色');
       var badge = v==='win' ? 'good' : (v==='lose' ? 'warn' : '');
+      BGM.stop();
+      if(v==='win'){ sfx.fanfare(); speak('恭喜获胜！','praise'); }
+      else if(v==='lose'){ sfx.comfort(); speak('惜败一筹，别灰心','comfort'); }
+      else { sfx.win(); speak('旗鼓相当','praise'); }
       var fmtLine=function(name, s, wall, finished){
         return '<span>'+name+'</span><b>'+s+' 题 · '+(finished ? (Math.round(wall*10)/10)+' 秒' : '未完成')+'</b>';
       };
@@ -1588,13 +1708,24 @@
     clearInterval(m.pingTimer);
     m.connect();
   });
+  // 切后台暂停音乐、切回继续，避免冻结标签页漏音
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden){
+      BGM.stop();
+      try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+    } else if(state.phase==='play'){
+      BGM.start();
+    }
+  });
 
   /* ================= 启动 ================= */
   showOverlay(cardStart());
   renderAll();
   els.expr.textContent = '准备开始';
   // 调试句柄（自动化测试用，不影响游戏）
-  window.__g24 = { race: RACE, state: state };
+  window.__g24 = { race: RACE, state: state, bgm: BGM, speak: speak };
+  // 预热语音合成（部分浏览器首次 getVoices 返回空，先触发加载）
+  try{ if(window.speechSynthesis) window.speechSynthesis.getVoices(); }catch(e){}
   // 对战链接直达：?race=XXXXX
   (function(){
     var m = location.search.match(/[?&]race=([A-Za-z0-9]{4,8})/);
